@@ -1,0 +1,153 @@
+# EM ETFs Correlation — YTD, 5Y, 10Y
+# Fonte de dados: Yahoo Finance via yfinance (preços ajustados)
+# Autor: você :)
+# ------------------------------------------------------------
+
+from datetime import date, timedelta
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ==== Parâmetros ====
+ETF_MAP = {
+    "Argentina (ARGT)": "ARGT",
+    "Brasil (EWZ)": "EWZ",
+    "Chile (ECH)": "ECH",
+    "Colômbia (GXG)": "GXG",
+    "África do Sul (EZA)": "EZA",
+    "Coreia do Sul (EWY)": "EWY",
+    "Índia (INDA)": "INDA",
+    "China (MCHI)": "MCHI",
+}
+MIN_OBS = 60         # mínimo de observações p/ incluir ativo no período
+SAVE_FIGS = True     # salvar heatmaps em PNG
+SAVE_CSVS = True     # salvar matrizes de correlação em CSV
+FIGSIZE = (7.5, 6.0) # tamanho dos charts
+
+# ==== Dependência ====
+try:
+    import yfinance as yf
+except ImportError as e:
+    raise SystemExit("Instale a dependência primeiro: pip install yfinance") from e
+
+# ==== Datas ====
+today = pd.Timestamp(date.today())
+start_10y = today - pd.DateOffset(years=10)
+start_5y = today - pd.DateOffset(years=5)
+start_ytd = pd.Timestamp(year=today.year, month=1, day=1)
+
+# Para baixar tudo de uma vez, pega a menor data
+global_start = min(start_10y, start_5y, start_ytd)
+
+# ==== Download dos preços ajustados ====
+tickers = list(ETF_MAP.values())
+data = yf.download(tickers, start=global_start.strftime("%Y-%m-%d"), auto_adjust=False, progress=False)
+
+# yfinance traz colunas multi-index; pegamos apenas Adjusted Close
+if isinstance(data.columns, pd.MultiIndex):
+    adj = data["Adj Close"].copy()
+else:
+    # caso venha single-index, já é a série do único ticker
+    adj = data.copy()
+
+# Mantém somente os tickers esperados e ordena conforme ETF_MAP
+adj = adj.reindex(columns=tickers)
+
+# ==== Funções auxiliares ====
+def slice_period(df_prices: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    """Recorta o período e dropa colunas com dados insuficientes."""
+    df = df_prices.loc[(df_prices.index >= start_date) & (df_prices.index <= end_date)].copy()
+    # Remove ativos com poucas observações
+    valid_cols = [c for c in df.columns if df[c].dropna().shape[0] >= MIN_OBS]
+    return df[valid_cols]
+
+def daily_log_returns(df_prices: pd.DataFrame) -> pd.DataFrame:
+    """Retornos log diários (robustos para correlação)."""
+    return np.log(df_prices).diff().dropna(how="all")
+
+def corr_matrix(df_returns: pd.DataFrame, labels_map: dict) -> pd.DataFrame:
+    """Matriz de correlação com rótulos amigáveis."""
+    # Rebatiza colunas para "País (TICKER)"
+    rev = {v: k for k, v in labels_map.items()}
+    df = df_returns.rename(columns=rev)
+    return df.corr()
+
+def cum_performance(df_prices: pd.DataFrame, labels_map: dict) -> pd.Series:
+    """Retorno acumulado do período (aprox. total return via Adj Close)."""
+    rev = {v: k for k, v in labels_map.items()}
+    first = df_prices.ffill().bfill().iloc[0]
+    last = df_prices.ffill().bfill().iloc[-1]
+    perf = (last / first - 1.0).rename_axis("Ticker")
+    perf.index = [rev.get(i, i) for i in perf.index]
+    return perf.sort_values(ascending=False)
+
+def plot_heatmap(corr: pd.DataFrame, title: str, fname: str | None = None):
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    im = ax.imshow(corr.values, vmin=-1, vmax=1)
+    ax.set_title(title, pad=12)
+    ax.set_xticks(range(corr.shape[1]))
+    ax.set_yticks(range(corr.shape[0]))
+    ax.set_xticklabels(corr.columns, rotation=45, ha="right")
+    ax.set_yticklabels(corr.index)
+    # Anotações
+    for i in range(corr.shape[0]):
+        for j in range(corr.shape[1]):
+            ax.text(j, i, f"{corr.values[i, j]:.2f}", ha="center", va="center", fontsize=8)
+    cbar = plt.colorbar(im)
+    cbar.set_label("Correlação")
+    plt.tight_layout()
+    if SAVE_FIGS and fname:
+        plt.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.show()
+
+# ==== Pipeline por janela ====
+windows = {
+    "YTD": (start_ytd, today),
+    "5Y": (start_5y, today),
+    "10Y": (start_10y, today),
+}
+
+all_corrs = {}
+all_perfs = {}
+
+print("\n== Correlações de Mercados Emergentes (retornos log diários) ==")
+print(f"Tickers: {', '.join(tickers)}")
+print(f"Períodos: {', '.join(windows.keys())}\n")
+
+for label, (start_d, end_d) in windows.items():
+    prices_w = slice_period(adj, start_d, end_d)
+    if prices_w.shape[1] < 2:
+        print(f"[{label}] Dados insuficientes para calcular correlação (colunas válidas: {list(prices_w.columns)})\n")
+        continue
+
+    rets_w = daily_log_returns(prices_w)
+    corr_w = corr_matrix(rets_w, ETF_MAP)
+    perf_w = cum_performance(prices_w, ETF_MAP)
+
+    all_corrs[label] = corr_w
+    all_perfs[label] = perf_w
+
+    # Saída no console
+    print(f"[{label}] Janela: {start_d.date()} → {end_d.date()}")
+    print("\nRetorno acumulado no período (aprox. TR):")
+    print((perf_w * 100).round(2).astype(str) + "%")
+    print("\nMatriz de correlação:")
+    print(corr_w.round(3))
+    print("-" * 80)
+
+    # Salvar CSVs
+    if SAVE_CSVS:
+        corr_w.to_csv(f"corr_{label}.csv")
+        perf_w.to_csv(f"performance_{label}.csv")
+
+    # Plot
+    plot_heatmap(corr_w, title=f"Correlação — {label}", fname=f"corr_{label}.png")
+
+print("\nArquivos gerados (se SAVE_* = True): corr_YTD.csv/.png, corr_5Y.csv/.png, corr_10Y.csv/.png,"
+      " performance_*.csv\n")
+
+# Notas:
+# 1) A correlação é calculada sobre retornos log diários (robusta para este fim).
+# 2) 'Adj Close' do Yahoo inclui ajustes (splits/dividendos); trata-se de aproximação de total return.
+# 3) Colunas com poucas observações no período são descartadas (MIN_OBS).
+# 4) Para granularidade diferente, agregue rets_w resample('W'/'M').sum() antes da correlação.
