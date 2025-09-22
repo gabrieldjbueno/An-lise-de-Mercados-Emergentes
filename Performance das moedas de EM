@@ -1,0 +1,134 @@
+# FX YTD vs USD + DXY — versão notebook/colab (com labels nas barras)
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import yfinance as yf
+from datetime import date, datetime
+
+# ===== CONFIG =====
+CUR_MAP = {
+    "Brasil (BRL)": "BRL=X",
+    "China (CNY)": "CNY=X",
+    "Chile (CLP)": "CLP=X",
+    "Coreia do Sul (KRW)": "KRW=X",
+    "África do Sul (ZAR)": "ZAR=X",
+    "México (MXN)": "MXN=X",
+    "Índia (INR)": "INR=X",
+    "Colômbia (COP)": "COP=X",
+}
+DXY_TICKER = "^DXY"
+FONTE_TXT = "Fonte: Yahoo Finance / Elaboração: Santa Fé Investimentos"
+
+START_DATE = None  # None = YTD; ou "2020-01-01"
+BASELINE_WINDOW_DAYS = 3  # usa a mediana dos primeiros N dias úteis p/ evitar outliers
+
+# ===== HELPERS =====
+def _to_series(x):
+    if x is None:
+        return pd.Series(dtype=float)
+    if isinstance(x, pd.DataFrame):
+        if x.shape[1] == 1:
+            x = x.squeeze("columns")
+        else:
+            x = x.iloc[:, 0]
+    return x
+
+def safe_adj_close(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+    if "Adj Close" in df:
+        s = df["Adj Close"]
+    elif "Close" in df:
+        s = df["Close"]
+    else:
+        s = df.iloc[:, -1]
+    return _to_series(s)
+
+def normalize_local_vs_usd_robust(usd_per_local: pd.Series, win: int) -> pd.Series:
+    s = _to_series(usd_per_local).dropna()
+    if s.empty:
+        return pd.Series(dtype=float)
+    base = s.head(win).median()
+    return (base / s) - 1.0
+
+def normalize_dxy_robust(dxy: pd.Series, win: int) -> pd.Series:
+    s = _to_series(dxy).dropna()
+    if s.empty:
+        return pd.Series(dtype=float)
+    base = s.head(win).median()
+    return (s / base) - 1.0
+
+# ===== PIPELINE =====
+today = date.today()
+if START_DATE is None:
+    start = date(today.year, 1, 1)
+else:
+    start = datetime.strptime(START_DATE, "%Y-%m-%d").date()
+
+out_line = f"ytd_fx_lines_{today.isoformat()}.png"
+out_bars = f"ytd_fx_bars_{today.isoformat()}.png"
+
+series = {}
+for nome, ticker in CUR_MAP.items():
+    df = yf.download(ticker, start=start, progress=False)
+    px = safe_adj_close(df)
+    ser = normalize_local_vs_usd_robust(px, BASELINE_WINDOW_DAYS)
+    if not ser.empty:
+        series[nome] = ser
+
+dxy_df = yf.download(DXY_TICKER, start=start, progress=False)
+dxy_px = safe_adj_close(dxy_df)
+dxy_ser = normalize_dxy_robust(dxy_px, BASELINE_WINDOW_DAYS)
+if not dxy_ser.empty:
+    series["DXY (US Dollar Index)"] = dxy_ser
+
+if not series:
+    raise RuntimeError("Sem dados após o download.")
+
+# ===== GRÁFICO LINHAS =====
+plt.figure(figsize=(11, 6))
+for nome, ser in series.items():
+    ser = ser.dropna()
+    if ser.empty:
+        continue
+    plt.plot(ser.index, ser * 100, label=nome)
+
+plt.title(f"YTD Performance das Moedas vs USD — {today.isoformat()}")
+plt.xlabel("Data")
+plt.ylabel("Performance (%)")
+plt.legend(ncol=2, fontsize=9)
+plt.grid(True, alpha=0.3)
+plt.figtext(0.01, -0.02, FONTE_TXT, fontsize=9, ha="left")
+plt.tight_layout()
+plt.savefig(out_line, dpi=150, bbox_inches="tight")
+plt.show()
+
+# ===== GRÁFICO BARRAS =====
+final_vals = {}
+for nome, ser in series.items():
+    ser = ser.dropna()
+    if not ser.empty:
+        final_vals[nome] = float(ser.iloc[-1] * 100)
+
+final = pd.Series(final_vals).sort_values(ascending=False)
+
+plt.figure(figsize=(9, 6))
+ax = final.plot(kind="bar")
+plt.title(f"Performance YTD Final vs USD — {today.isoformat()}")
+plt.ylabel("Performance (%)")
+plt.xticks(rotation=45, ha="right")
+plt.grid(axis="y", alpha=0.3)
+
+# rótulos acima de cada barra
+for p in ax.patches:
+    value = p.get_height()
+    ax.annotate(f"{value:.2f}%",
+                (p.get_x() + p.get_width() / 2., value),
+                ha="center", va="bottom", fontsize=8, xytext=(0, 2), textcoords="offset points")
+
+plt.figtext(0.01, -0.02, FONTE_TXT, fontsize=9, ha="left")
+plt.tight_layout()
+plt.savefig(out_bars, dpi=150, bbox_inches="tight")
+plt.show()
+
+print(f"Salvo:\n  {out_line}\n  {out_bars}")
