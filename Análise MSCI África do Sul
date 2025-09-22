@@ -1,0 +1,65 @@
+# -*- coding: utf-8 -*-
+# Correlação (6, 12, 24 meses) entre EZA (África do Sul) e GLD (ouro)
+# + gráfico de 12 meses normalizado (=1 no início)
+#
+# Requisitos:
+#   pip install yfinance pandas matplotlib
+
+import datetime as dt
+import pandas as pd
+import yfinance as yf
+import matplotlib.pyplot as plt
+
+# ---------- Parâmetros ----------
+EQUITY_TICKER = "EZA"   # iShares MSCI South Africa ETF
+GOLD_TICKER   = "GLD"   # SPDR Gold Shares (proxy do ouro)
+TODAY = dt.date.today()
+START_DATE = TODAY - pd.DateOffset(months=32)  # cobre 24m com margem
+END_DATE   = TODAY
+
+# ---------- Funções ----------
+def get_adj_close(ticker: str, start, end) -> pd.Series:
+    df = yf.download(ticker, start=start, end=end, auto_adjust=False, progress=False)
+    if df.empty:
+        raise ValueError(f"Sem dados para {ticker}. Verifique o ticker e a conexão.")
+    s = df["Adj Close"].copy()
+    s.name = ticker       # <<< evita usar .rename(ticker)
+    return s
+
+def corr_last_months(ret_df: pd.DataFrame, months: int) -> float:
+    window = months * 21  # ~21 pregões/mês
+    if len(ret_df) < window:
+        raise ValueError(f"Dados insuficientes para {months} meses (precisa de ~{window} pregões).")
+    return ret_df.iloc[-window:].corr().loc[EQUITY_TICKER, GOLD_TICKER]
+
+# ---------- Dados ----------
+eza = get_adj_close(EQUITY_TICKER, START_DATE, END_DATE)
+gld = get_adj_close(GOLD_TICKER,   START_DATE, END_DATE)
+prices = pd.concat([eza, gld], axis=1).dropna()
+
+# ---------- Retornos e correlações ----------
+returns = prices.pct_change().dropna()
+corr_6m  = corr_last_months(returns, 6)
+corr_12m = corr_last_months(returns, 12)
+corr_24m = corr_last_months(returns, 24)
+
+print("Correlação dos retornos (EZA vs GLD):")
+print(f"  6 meses : {corr_6m:.4f}")
+print(f" 12 meses : {corr_12m:.4f}")
+print(f" 24 meses : {corr_24m:.4f}")
+
+# ---------- Gráfico 12 meses (normalizado) ----------
+months_12 = 12 * 21
+plot_prices = prices.iloc[-months_12:].copy()
+norm = plot_prices / plot_prices.iloc[0]
+
+plt.figure(figsize=(10, 5))
+plt.plot(norm.index, norm[EQUITY_TICKER], label=EQUITY_TICKER)
+plt.plot(norm.index, norm[GOLD_TICKER], label=GOLD_TICKER)
+plt.title(f"{EQUITY_TICKER} vs {GOLD_TICKER} — últimos 12 meses (normalizado)")
+plt.xlabel("Data")
+plt.ylabel("Preço normalizado")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
