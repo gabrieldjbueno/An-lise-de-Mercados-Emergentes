@@ -1,0 +1,113 @@
+# Comparação 2025: EWY vs S&P500 vs NVIDIA + AMD + AVGO
+# Retornos finais em preto, labels levemente à esquerda
+# Requisitos: pip install yfinance pandas matplotlib python-dateutil
+
+import os
+from datetime import datetime, date
+from dateutil.tz import gettz
+import pandas as pd
+import yfinance as yf
+import matplotlib.pyplot as plt
+import numpy as np
+
+# -----------------------
+# Parâmetros principais
+# -----------------------
+RAW_TICKERS = ["EWY", "^GSPC", "NVDA", "AMD", "AVGO"]
+LABELS = {"^GSPC": "S&P500"}  # troca ^GSPC por S&P500
+TICKERS = [LABELS.get(t, t) for t in RAW_TICKERS]
+TZ = "America/Sao_Paulo"
+
+today_local = datetime.now(gettz(TZ)).date()
+START = date(2025, 1, 1)
+END = today_local
+
+# -----------------------
+# Download dos dados
+# -----------------------
+data = yf.download(
+    RAW_TICKERS,
+    start=str(START),
+    end=str(END + pd.Timedelta(days=1)),
+    auto_adjust=True,
+    progress=False,
+    group_by="ticker",
+    threads=True,
+)
+
+# Extrai fechamentos e renomeia colunas
+closes = pd.DataFrame({LABELS.get(t, t): data[t]["Close"] for t in RAW_TICKERS}).dropna(how="all")
+closes = closes.ffill().dropna()
+
+if closes.empty:
+    raise SystemExit("Sem dados no período selecionado.")
+
+# -----------------------
+# Normalização e retornos
+# -----------------------
+normalized = (closes / closes.iloc[0]) * 100.0
+daily_ret = closes.pct_change().dropna()
+corr = daily_ret.corr()
+ytd_returns = (closes.iloc[-1] / closes.iloc[0] - 1.0) * 100.0
+
+# -----------------------
+# Gráfico de linha com retornos finais
+# -----------------------
+plt.figure(figsize=(11, 6))
+colors = plt.cm.tab10(np.linspace(0, 1, len(TICKERS)))
+
+for i, tic in enumerate(TICKERS):
+    plt.plot(normalized.index, normalized[tic], label=tic, color=colors[i])
+    # ponto final
+    plt.scatter(normalized.index[-1], normalized[tic].iloc[-1], color=colors[i])
+    # texto em PRETO, levemente à esquerda
+    plt.text(
+        normalized.index[-1] - pd.Timedelta(days=5),
+        normalized[tic].iloc[-1],
+        f"{ytd_returns[tic]:.1f}%",
+        va="center",
+        ha="right",
+        color="black",
+        fontsize=9,
+        fontweight="bold"
+    )
+
+plt.title("EWY vs S&P500 vs NVDA vs AMD vs AVGO — Base 100 (YTD 2025)")
+plt.xlabel("Data")
+plt.ylabel(f"Índice (base = 100 em {normalized.index[0].strftime('%Y-%m-%d')})")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.figtext(
+    0.01, -0.02,
+    "Fonte: Yahoo Finance/Elaboração: Santa Fé Investimento",
+    ha="left", va="top", fontsize=9, alpha=0.9
+)
+plt.tight_layout()
+plt.savefig("EWY_SP500_NVDA_AMD_AVGO_base100_com_retorno.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+# -----------------------
+# Heatmap de correlação
+# -----------------------
+plt.figure(figsize=(8.5, 6.5))
+im = plt.imshow(corr.values, aspect="equal", cmap="RdYlGn")
+
+plt.xticks(np.arange(len(TICKERS)), TICKERS)
+plt.yticks(np.arange(len(TICKERS)), TICKERS)
+plt.title("Correlação (retornos diários) — EWY, S&P500, NVDA, AMD, AVGO")
+
+for i in range(len(TICKERS)):
+    for j in range(len(TICKERS)):
+        plt.text(j, i, f"{corr.values[i, j]:.2f}", ha="center", va="center", color="black")
+
+cb = plt.colorbar(im, fraction=0.046, pad=0.04)
+cb.set_label("Coeficiente de correlação")
+
+plt.figtext(
+    0.01, -0.02,
+    "Fonte: Yahoo Finance/Elaboração: Santa Fé Investimento",
+    ha="left", va="top", fontsize=9, alpha=0.9
+)
+plt.tight_layout()
+plt.savefig("EWY_SP500_NVDA_AMD_AVGO_heatmap_correlacao.png", dpi=150, bbox_inches="tight")
+plt.show()
