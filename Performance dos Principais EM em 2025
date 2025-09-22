@@ -1,0 +1,120 @@
+# -*- coding: utf-8 -*-
+# EM 2025 – ETFs em NY: ARGT (Argentina), EWZ (Brasil), ECH (Chile), GXG (Colômbia),
+# EZA (África do Sul), EWY (Coreia do Sul), INDA (Índia), MCHI (China)
+
+import datetime as dt
+import pandas as pd
+import numpy as np
+import yfinance as yf
+import matplotlib.pyplot as plt
+from matplotlib.ticker import PercentFormatter
+
+# ========= Parâmetros =========
+TICKERS = {
+    "Argentina (ARGT)": "ARGT",
+    "Brasil (EWZ)": "EWZ",
+    "Chile (ECH)": "ECH",
+    "Colômbia (GXG)": "GXG",
+    "África do Sul (EZA)": "EZA",
+    "Coreia do Sul (EWY)": "EWY",
+    "Índia (INDA)": "INDA",
+    "China (MCHI)": "MCHI",
+}
+
+start_2025 = pd.Timestamp("2025-01-01")
+today = pd.Timestamp.today().normalize()
+
+# Para 3M/6M, usamos DateOffset e buscamos o preço mais próximo disponível
+def get_ref_date(series: pd.Series, ref: pd.Timestamp) -> pd.Timestamp:
+    """Retorna a data de pregão em/antes de ref com base no índice do Series."""
+    ref = pd.Timestamp(ref)
+    # .asof exige Series ordenada e dtype correto
+    # Voltamos até encontrar uma data existente (no máximo 10 dias úteis)
+    if ref in series.index:
+        return ref
+    # usar busca "asof" com reindex + method='ffill'
+    idx = series.index[series.index <= ref]
+    if len(idx) == 0:
+        return series.index[0]
+    return idx[-1]
+
+def perf_between(series: pd.Series, d0: pd.Timestamp, d1: pd.Timestamp) -> float:
+    d0 = get_ref_date(series, d0)
+    d1 = get_ref_date(series, d1)
+    v0 = series.loc[d0]
+    v1 = series.loc[d1]
+    return float(v1 / v0 - 1.0)
+
+# ========= Download =========
+download_start = (start_2025 - pd.DateOffset(months=7)).strftime("%Y-%m-%d")  # margem para 6M
+data = yf.download(list(TICKERS.values()), start=download_start, end=(today + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))["Close"]
+
+# Garantir DataFrame com colunas por ticker
+if isinstance(data, pd.Series):
+    data = data.to_frame()
+
+# Remover colunas vazias, alinhar datas
+data = data.sort_index().dropna(how="all")
+
+# ========= Normalização para o gráfico (base 100 em 01/01/2025) =========
+data_2025 = data[data.index >= start_2025].copy()
+# Algumas séries podem não ter dado exatamente em 01/01/2025; pegamos o 1º disponível em 2025
+base = data_2025.ffill().bfill().iloc[0]
+norm = data_2025.divide(base, axis=1) * 100.0
+
+# ========= Cálculo das performances =========
+end_date = data.index[-1]
+
+three_m_ref = end_date - pd.DateOffset(months=3)
+six_m_ref   = end_date - pd.DateOffset(months=6)
+
+rows = []
+for name, tic in TICKERS.items():
+    s = data[tic].dropna()
+    # YTD: de 01/01/2025 até a última data disponível
+    # usar 1º preço de 2025 (ou 1º disponível após)
+    if len(s[s.index >= start_2025]) == 0:
+        ytd = np.nan
+    else:
+        first_2025_date = s[s.index >= start_2025].index[0]
+        ytd = perf_between(s, first_2025_date, end_date)
+    # 3M e 6M
+    p3m = np.nan if len(s) == 0 else perf_between(s, three_m_ref, end_date)
+    p6m = np.nan if len(s) == 0 else perf_between(s, six_m_ref, end_date)
+    rows.append([name, p3m, p6m, ytd])
+
+perf_df = pd.DataFrame(rows, columns=["Mercado (ETF)", "3M", "6M", "YTD 2025"]).set_index("Mercado (ETF)")
+
+# ========= Plot =========
+plt.figure(figsize=(12, 6.5))
+for name, tic in TICKERS.items():
+    if tic in norm.columns:
+        plt.plot(norm.index, norm[tic], label=name, linewidth=2)
+
+plt.title("Emerging Markets – ETFs em NY (base 100 em 01/01/2025)", fontsize=14)
+plt.ylabel("Índice (01/01/2025 = 100)")
+plt.xlabel("Data")
+plt.legend(loc="best", ncol=2, fontsize=9, frameon=False)
+plt.grid(True, alpha=0.3)
+
+# Nota de fonte
+plt.figtext(0.01, -0.02, "Fonte: Yahoo Finance • Elaboração: Santa Fé Investimentos", fontsize=9)
+
+plt.tight_layout()
+plt.savefig("emerging_markets_2025_lines.png", dpi=200, bbox_inches="tight")
+# plt.show()
+
+# ========= Tabela formatada =========
+def fmt_pct(x):
+    return "" if pd.isna(x) else f"{x*100:.2f}%"
+
+styled = perf_df.copy()
+styled_out = styled.applymap(fmt_pct)
+print(styled_out)
+
+# Também salvar CSV bruto (valores decimais)
+perf_df.to_csv("emerging_markets_2025_performance.csv", float_format="%.6f")
+
+print("\nArquivos salvos:")
+print(" - emerging_markets_2025_lines.png")
+print(" - emerging_markets_2025_performance.csv")
