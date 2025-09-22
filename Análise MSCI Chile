@@ -1,0 +1,71 @@
+# ECH x Cobre (via ETF CPER) x Lítio (LIT) em 2025
+# Requisitos: pip install yfinance pandas matplotlib seaborn
+
+import datetime as dt
+import pandas as pd
+import yfinance as yf
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+start = "2025-01-01"
+end = dt.date.today().strftime("%Y-%m-%d")
+
+# tickers:
+# - ECH (ETF Chile)
+# - CPER (United States Copper Index Fund) -> proxy cobre
+# - LIT (Global X Lithium & Battery Tech ETF) -> proxy lítio
+tickers = ["ECH", "CPER", "LIT"]
+
+data = yf.download(tickers, start=start, end=end)["Close"]
+
+# garante formato dataframe
+if isinstance(data, pd.Series):
+    data = data.to_frame()
+
+# padroniza colunas
+cols_map = {}
+for c in data.columns:
+    cols_map[c] = c[-1] if isinstance(c, tuple) else c
+data = data.rename(columns=cols_map)
+
+# dropa linhas totalmente nulas
+data = data.dropna(how="all")
+
+# normaliza para 100 em 01/01/2025
+first_valid = data.apply(lambda s: s.dropna().iloc[0] if s.dropna().size else pd.NA)
+norm = (data.divide(first_valid)) * 100
+
+# --- gráfico de linhas ---
+plt.figure(figsize=(10,6))
+norm["ECH"].dropna().plot(linewidth=2, label="ECH (Índice=100 em 01/01/2025)")
+norm["CPER"].dropna().plot(linewidth=2, linestyle="--", label="Cobre - CPER ETF (Índice=100)")
+norm["LIT"].dropna().plot(linewidth=2, linestyle=":", label="Lítio - LIT ETF (Índice=100)")
+
+plt.title("ECH (MSCI Chile) vs. Cobre (CPER) vs. Lítio (2025)")
+plt.xlabel("Data")
+plt.ylabel("Índice (jan/2025 = 100)")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.figtext(
+    0.01, -0.02,
+    "Fontes: Yahoo Finance (ECH, CPER, LIT) | Observação: CPER é proxy de cobre (ETF), LIT é proxy de lítio (ETF) | Elaboração: Santa Fé Investimentos",
+    fontsize=9
+)
+plt.tight_layout()
+plt.show()
+
+# --- matriz de correlação ---
+corr = data.pct_change().corr()
+
+plt.figure(figsize=(6,4))
+sns.heatmap(
+    corr,
+    annot=True,
+    cmap="coolwarm",   # reverso: claro=correlação alta, escuro=baixa
+    vmin=-1, vmax=1,
+    square=True,
+    cbar_kws={"shrink": 0.8}
+)
+plt.title("Correlação entre ECH, Cobre (CPER) e Lítio (LIT) em 2025")
+plt.tight_layout()
+plt.show()
