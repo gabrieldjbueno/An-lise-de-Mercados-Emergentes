@@ -1,0 +1,89 @@
+# -*- coding: utf-8 -*-
+# CQQQ vs Big Techs (NVDA, AAPL, MSFT, META, GOOGL) — YTD 2025
+# Ajustes solicitados:
+# 1) Gráfico de linha maior
+# 2) Gráfico de barras com linha tracejada preta da média
+# 3) Big Techs americanas em verde; CQQQ em cinza
+# 4) Rodapé: "Fonte: Yahoo Finance/Elaboração: Santa Fé Investimentos"
+
+import datetime as dt
+import pandas as pd
+import yfinance as yf
+import matplotlib.pyplot as plt
+
+# -------- Config --------
+tickers = ["CQQQ", "NVDA", "AAPL", "MSFT", "META", "GOOGL"]
+us_techs = {"NVDA", "AAPL", "MSFT", "META", "GOOGL"}
+start = dt.date(2024, 12, 31)   # base para YTD 2025
+end   = dt.date(2025, 10, 1)    # data de corte
+
+# -------- Download --------
+data = yf.download(tickers, start=start, end=end, progress=False)["Close"]
+data = data.dropna(axis=1, how="all").ffill()
+
+# -------- Retornos acumulados YTD --------
+base = data.iloc[0]
+idx = (data / base) * 100.0
+ytd_ret = (data.iloc[-1] / base - 1.0).sort_values(ascending=False)
+
+# -------- Gráfico de linha (índice 100 = 31/12/2024) --------
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(16, 7), dpi=120)  # aumenta tamanho e resolução
+idx.plot(ax=ax)  # >>> usa o mesmo axes explicitamente
+
+ax.set_title("CQQQ vs Big Techs — Índice (100 = 31/12/2024) — YTD 2025")
+ax.set_ylabel("Índice (31/12/2024 = 100)")
+ax.set_xlabel("Data")
+
+# Rodapé
+fig.text(
+    0.99, 0.01, "Fonte: Yahoo Finance/Elaboração: Santa Fé Investimentos",
+    ha="right", va="bottom", fontsize=9
+)
+
+# Evita que o rodapé seja cortado
+fig.tight_layout(rect=(0, 0.03, 1, 1))
+plt.show()
+
+
+# -------- Gráfico de barras (retorno YTD %) --------
+# Define cores: verde para US Techs, cinza para CQQQ (ou outros)
+colors = []
+for t in ytd_ret.index:
+    if t in us_techs:
+        colors.append("green")   # (3) techs americanas em verde
+    else:
+        colors.append("gray")    # CQQQ em cinza (neutro)
+
+fig, ax = plt.subplots(figsize=(10, 6))
+bars = ax.bar(ytd_ret.index, ytd_ret.values * 100, color=colors)
+ax.set_title("Retorno YTD 2025 (%) — CQQQ vs Big Techs")
+ax.set_ylabel("%")
+ax.set_xlabel("Ticker")
+
+# Rótulos acima das barras
+for rect, val in zip(bars, ytd_ret.values):
+    ax.text(rect.get_x() + rect.get_width()/2, val*100,
+            f"{val*100:.1f}%", ha="center", va="bottom", fontsize=9)
+
+# (2) Linha tracejada preta da média
+mean_val = ytd_ret.mean() * 100
+ax.axhline(mean_val, linestyle="--", linewidth=1.2, color="black")
+ax.text(len(ytd_ret)-0.5, mean_val, f"Média: {mean_val:.1f}%",
+        ha="right", va="bottom", fontsize=9, color="black")
+
+# Rodapé
+fig.text(
+    0.99, 0.01, "Fonte: Yahoo Finance/Elaboração: Santa Fé Investimentos",
+    ha="right", va="bottom", fontsize=9
+)
+fig.tight_layout()
+plt.show()
+
+# -------- Tabela --------
+tabela = pd.DataFrame({
+    "Ticker": ytd_ret.index,
+    "Retorno_YTD_%": (ytd_ret.values * 100).round(2)
+})
+print(tabela.to_string(index=False))
