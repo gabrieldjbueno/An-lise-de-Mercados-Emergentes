@@ -1,0 +1,229 @@
+# -*- coding: utf-8 -*-
+"""
+ETFs América do Sul (2025) + Moedas — salvar e PLOTAR
+Países: Argentina, Brasil, Chile, Colômbia e Peru
+Gera:
+1) Linha: performance dos ETFs em 2025 (base 100 no 1º pregão)
+2) Barras: performance YTD (%) com linha tracejada preta na média (com rótulo)
+3) Matriz de correlação (retornos diários 2025)
+4) Barras: volatilidade anualizada 2025 (%)
+5) Linha: performance das moedas em 2025 (LCY/USD, base 100) — ↑ = moeda local aprecia
+Todos os gráficos incluem: "Fonte: Yahoo Finance / Elaboração Santa Fé Investimentos"
+"""
+
+import os
+from datetime import datetime
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import yfinance as yf
+
+# ------------------ Flags ------------------
+SHOW_PLOTS = True   # exibe os gráficos na tela
+SAVE_FIGS  = True   # salva os PNGs
+DPI = 150           # use 300 para alta resolução
+
+# ------------------ Config ------------------
+TICKERS_ETF = {
+    "Argentina": "ARGT",
+    "Brasil":    "EWZ",
+    "Chile":     "ECH",
+    "Colombia":  "GXG",
+    "Peru":      "EPU",
+}
+TICKERS_FX_USDLCY = {
+    "Argentina": "ARS=X",
+    "Brasil":    "BRL=X",
+    "Chile":     "CLP=X",
+    "Colombia":  "COP=X",
+    "Peru":      "PEN=X",
+}
+COLORS = {"Argentina":"c","Brasil":"g","Chile":"r","Colombia":"y","Peru":"purple"}
+ALIASES = {"Argentina":"Argentina","Brasil":"Brasil","Brazil":"Brasil","Chile":"Chile","Colombia":"Colombia","Colômbia":"Colombia","Peru":"Peru"}
+
+START = "2025-01-01"
+END   = datetime.today().strftime("%Y-%m-%d")
+OUTDIR = "output"; os.makedirs(OUTDIR, exist_ok=True)
+SOURCE_STR = "Fonte: Yahoo Finance / Elaboração Santa Fé Investimentos"
+
+# ------------------ Helpers ------------------
+def normalize_name(name: str) -> str:
+    return ALIASES.get(str(name), str(name))
+
+def color_for(name: str) -> str:
+    return COLORS.get(normalize_name(name), "gray")
+
+def add_source_footer():
+    plt.figtext(0.99, 0.01, SOURCE_STR, ha="right", va="bottom", fontsize=9, alpha=0.85)
+
+def finalize_figure(outpath: str):
+    add_source_footer()
+    plt.tight_layout()
+    if SAVE_FIGS:
+        plt.savefig(outpath, dpi=DPI)
+    if SHOW_PLOTS:
+        plt.show()
+    plt.close()
+
+def safe_clean(df: pd.DataFrame) -> pd.DataFrame:
+    return df.ffill().dropna(how="any")
+
+def _select_close_or_adj(data: pd.DataFrame) -> pd.DataFrame:
+    # Resolve MultiIndex vs colunas simples; prioriza "Adj Close", senão "Close"
+    if isinstance(data.columns, pd.MultiIndex):
+        lvl0 = set(data.columns.get_level_values(0))
+        if "Adj Close" in lvl0:
+            data = data["Adj Close"]
+        elif "Close" in lvl0:
+            data = data["Close"]
+        else:
+            data = data.xs(data.columns.levels[0][-1], axis=1, level=0, drop_level=True)
+    else:
+        if "Adj Close" in getattr(data, "columns", []):
+            data = data["Adj Close"]
+        elif "Close" in getattr(data, "columns", []):
+            data = data["Close"]
+        if isinstance(data, pd.Series):
+            data = data.to_frame()
+    if isinstance(data, pd.Series):
+        data = data.to_frame()
+    return data
+
+def fetch_adj_close(tickers: list, start: str, end: str) -> pd.DataFrame:
+    raw = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
+    if raw is None or len(raw) == 0:
+        raise ValueError("Download vazio do yfinance.")
+    return _select_close_or_adj(raw)
+
+def fetch_prices_etf() -> pd.DataFrame:
+    raw = fetch_adj_close(list(TICKERS_ETF.values()), START, END)
+    df = raw.rename(columns={v:k for k,v in TICKERS_ETF.items()})
+    df.columns = [normalize_name(c) for c in df.columns]
+    df = df.dropna(axis=1, how="all")
+    df = safe_clean(df)
+    if df.empty:
+        raise ValueError("Sem dados de ETFs para o período.")
+    return df
+
+def fetch_fx_lcyusd() -> pd.DataFrame:
+    raw = fetch_adj_close(list(TICKERS_FX_USDLCY.values()), START, END)
+    df = raw.rename(columns={v:k for k,v in TICKERS_FX_USDLCY.items()})
+    df.columns = [normalize_name(c) for c in df.columns]
+    df = df.dropna(axis=1, how="all")
+    df = safe_clean(df)
+    df = 1.0 / df  # LCY/USD (↑ = moeda local aprecia)
+    if df.empty:
+        raise ValueError("Sem dados de FX para o período.")
+    return df
+
+def compute_metrics(prices: pd.DataFrame):
+    norm = prices / prices.iloc[0] * 100.0
+    rets = prices.pct_change().dropna(how="any")
+    ytd  = (prices.iloc[-1] / prices.iloc[0] - 1.0) * 100.0
+    vol  = rets.std() * np.sqrt(252) * 100.0
+    corr = rets.corr()
+    order = [c for c in ["Argentina","Brasil","Chile","Colombia","Peru"] if c in prices.columns]
+    return norm[order], rets[order], ytd[order], vol[order], corr.loc[order, order]
+
+# ------------------ Plots ------------------
+def plot_line(norm: pd.DataFrame, title: str, ylabel: str, outpath: str):
+    plt.figure(figsize=(10, 6))
+    for country in norm.columns:
+        plt.plot(norm.index, norm[country], label=str(country), linewidth=2, color=color_for(country))
+    plt.title(title); plt.xlabel("Data"); plt.ylabel(ylabel)
+    plt.grid(True, alpha=0.3); plt.legend()
+    finalize_figure(outpath)
+
+def plot_bar_ytd(ytd: pd.Series, outpath: str):
+    ytd = ytd.copy(); ytd.index = [normalize_name(i) for i in ytd.index]
+    plt.figure(figsize=(9, 6))
+    bars = plt.bar(ytd.index, ytd.values,
+                   color=[color_for(c) for c in ytd.index],
+                   edgecolor="black", linewidth=1.0)
+    plt.title("Performance YTD em 2025 (%) – ETFs de Bolsas (linha tracejada = média)")
+    plt.ylabel("Retorno (%)")
+    for rect, val in zip(bars, ytd.values):
+        height = rect.get_height()
+        va = "bottom" if height >= 0 else "top"
+        offset = 0.5 if height >= 0 else -0.5
+        plt.text(rect.get_x()+rect.get_width()/2., height+offset, f"{val:.1f}%", ha="center", va=va, fontsize=10)
+    mean_val = float(ytd.mean())
+    plt.axhline(mean_val, linestyle="--", color="black", linewidth=1.5)
+    plt.text(len(ytd)-0.4, mean_val, f"Média: {mean_val:.1f}%", va="bottom", ha="right", fontsize=10)
+    plt.grid(axis="y", alpha=0.3)
+    finalize_figure(outpath)
+
+def plot_corr_heatmap(corr: pd.DataFrame, outpath: str):
+    plt.figure(figsize=(7.5, 6.5))
+    im = plt.imshow(corr.values, vmin=-1, vmax=1, cmap="coolwarm")
+    plt.colorbar(im, fraction=0.046, pad=0.04, label="Correlação")
+    plt.xticks(range(len(corr.columns)), corr.columns, rotation=45, ha="right")
+    plt.yticks(range(len(corr.index)), corr.index)
+    plt.title("Matriz de Correlação – Retornos Diários (2025)")
+    # Anotações
+    for i in range(len(corr.index)):
+        for j in range(len(corr.columns)):
+            plt.text(j, i, f"{corr.values[i, j]:.2f}", ha="center", va="center", color="black", fontsize=9)
+    finalize_figure(outpath)
+
+def plot_vol_bars(vol: pd.Series, outpath: str):
+    vol = vol.copy(); vol.index = [normalize_name(i) for i in vol.index]
+    plt.figure(figsize=(9, 6))
+    bars = plt.bar(vol.index, vol.values,
+                   color=[color_for(c) for c in vol.index],
+                   edgecolor="black", linewidth=1.0)
+    plt.title("Volatilidade Anualizada em 2025 (%) – ETFs de Bolsas")
+    plt.ylabel("Volatilidade (%)")
+    for rect, val in zip(bars, vol.values):
+        height = rect.get_height()
+        plt.text(rect.get_x()+rect.get_width()/2., height, f"{val:.1f}%", ha="center", va="bottom", fontsize=10)
+    plt.grid(axis="y", alpha=0.3)
+    finalize_figure(outpath)
+
+# ------------------ Execução ------------------
+def main():
+    # ETFs
+    etf_prices = fetch_prices_etf()
+    etf_norm, etf_rets, etf_ytd, etf_vol, etf_corr = compute_metrics(etf_prices)
+
+    # Moedas (LCY/USD)
+    fx_lcyusd = fetch_fx_lcyusd()
+    fx_norm   = fx_lcyusd / fx_lcyusd.iloc[0] * 100.0  # base 100
+
+    # Caminhos
+    p_line_etf = os.path.join(OUTDIR, "etfs_sul_america_2025_linha.png")
+    p_ytd_etf  = os.path.join(OUTDIR, "etfs_sul_america_2025_ytd.png")
+    p_corr     = os.path.join(OUTDIR, "etfs_sul_america_2025_correlacao.png")
+    p_vol      = os.path.join(OUTDIR, "etfs_sul_america_2025_vol.png")
+    p_fx_line  = os.path.join(OUTDIR, "moedas_america_do_sul_2025_linha.png")
+    p_csv      = os.path.join(OUTDIR, "etfs_sul_america_2025_resumo.csv")
+
+    # Gráficos ETFs
+    plot_line(etf_norm, "ETFs de Bolsas – América do Sul (2025, base = 100 no 1º pregão)",
+              "Índice (base 100)", p_line_etf)
+    plot_bar_ytd(etf_ytd, p_ytd_etf)
+    plot_corr_heatmap(etf_corr, p_corr)
+    plot_vol_bars(etf_vol, p_vol)
+
+    # Gráfico Moedas
+    plot_line(fx_norm, "Moedas (LCY/USD) – América do Sul (2025, base = 100)  ↑ = moeda local aprecia",
+              "Índice (base 100, LCY/USD)", p_fx_line)
+
+    # Tabela resumo ETFs
+    summary = pd.DataFrame({
+        "Ticker": [TICKERS_ETF[c] for c in etf_ytd.index],
+        "Retorno YTD (%)": etf_ytd.round(2),
+        "Volatilidade Anualizada 2025 (%)": etf_vol.round(2),
+    }, index=etf_ytd.index).rename_axis("País")
+    summary.to_csv(p_csv, encoding="utf-8-sig")
+
+    print("Concluído!")
+    print(f"Gráfico linha ETFs:  {p_line_etf}")
+    print(f"Gráfico YTD ETFs:    {p_ytd_etf}")
+    print(f"Matriz correlação:   {p_corr}")
+    print(f"Volatilidade ETFs:   {p_vol}")
+    print(f"Gráfico moedas:      {p_fx_line}")
+    print(f"Resumo CSV:          {p_csv}")
+
+if __name__ == "__main__":
+    main()
