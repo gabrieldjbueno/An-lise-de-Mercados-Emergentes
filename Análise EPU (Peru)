@@ -1,0 +1,131 @@
+# -*- coding: utf-8 -*-
+"""
+EPU x Commodities (Cobre, Ouro, Prata) – 2025
+
+Coleta dados do Yahoo Finance:
+- EPU (iShares MSCI Peru ETF)
+- COPX (Global X Copper Miners ETF)
+- GLD (SPDR Gold Shares)
+- SLV (iShares Silver Trust)
+
+Período: 2025-01-01 até hoje.
+Gera:
+  1) Linha: performance normalizada (base 100)
+  2) Matriz de correlação (coolwarm_r)
+  3) Resumo com YTD (%) e volatilidade anualizada (%)
+"""
+
+import os
+from datetime import datetime
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import yfinance as yf
+
+# ---------- CONFIG ----------
+START = "2025-01-01"
+END = datetime.today().strftime("%Y-%m-%d")
+OUTDIR = "output"; os.makedirs(OUTDIR, exist_ok=True)
+DPI = 150
+SOURCE_STR = "Fonte: Yahoo Finance / Elaboração Santa Fé Investimentos"
+
+TICKERS = {
+    "EPU (Peru ETF)": "EPU",
+    "COPX (Copper Miners)": "COPX",
+    "GLD (Gold)": "GLD",
+    "SLV (Silver)": "SLV"
+}
+
+COLORS = {
+    "EPU (Peru ETF)": "#8A2BE2",   # Roxo
+    "GLD (Gold)": "#FFD700",       # Amarelo
+    "COPX (Copper Miners)": "#8B4513",  # Marrom (saddle brown)
+    "SLV (Silver)": "#808080"      # Cinza
+}
+
+# ---------- HELPERS ----------
+def add_source_footer():
+    plt.figtext(0.99, 0.01, SOURCE_STR, ha="right", va="bottom", fontsize=9, alpha=0.85)
+
+def finalize_plot(outpath):
+    add_source_footer()
+    plt.tight_layout()
+    plt.savefig(outpath, dpi=DPI)
+    plt.show()
+    plt.close()
+
+def _select_close_or_adj(df: pd.DataFrame) -> pd.DataFrame:
+    if isinstance(df.columns, pd.MultiIndex):
+        lvl0 = set(df.columns.get_level_values(0))
+        if "Adj Close" in lvl0:
+            df = df["Adj Close"]
+        elif "Close" in lvl0:
+            df = df["Close"]
+        else:
+            df = df.xs(df.columns.levels[0][-1], axis=1, level=0, drop_level=True)
+    else:
+        if "Adj Close" in getattr(df, "columns", []):
+            df = df["Adj Close"]
+        elif "Close" in getattr(df, "columns", []):
+            df = df["Close"]
+        if isinstance(df, pd.Series):
+            df = df.to_frame()
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    return df
+
+def fetch_prices(tickers: dict, start: str, end: str) -> pd.DataFrame:
+    raw = yf.download(list(tickers.values()), start=start, end=end, auto_adjust=True, progress=False)
+    if raw is None or len(raw) == 0:
+        raise RuntimeError("Erro ao baixar dados.")
+    data = _select_close_or_adj(raw)
+    rename_map = {v: k for k, v in tickers.items()}
+    data = data.rename(columns=rename_map)
+    data = data.ffill().dropna(how="any")
+    return data
+
+def normalize_base_100(df: pd.DataFrame) -> pd.DataFrame:
+    return df / df.iloc[0] * 100.0
+
+# ---------- MAIN ----------
+def main():
+    df = fetch_prices(TICKERS, START, END)
+    norm = normalize_base_100(df)
+    rets = df.pct_change().dropna(how="any")
+    corr = rets.corr()
+
+    # ---------- LINE CHART ----------
+    plt.figure(figsize=(10, 6))
+    for col in norm.columns:
+        plt.plot(norm.index, norm[col], linewidth=2, label=col, color=COLORS.get(col))
+    plt.title("EPU x Metais (Cobre, Ouro, Prata) — 2025, base = 100 no 1º pregão")
+    plt.xlabel("Data"); plt.ylabel("Índice (base 100)")
+    plt.legend(); plt.grid(True, alpha=0.3)
+    finalize_plot(os.path.join(OUTDIR, "epu_metais_2025_linha.png"))
+
+    # ---------- CORRELATION ----------
+    plt.figure(figsize=(6, 5))
+    im = plt.imshow(corr.values, vmin=-1, vmax=1, cmap="coolwarm_r")
+    plt.colorbar(im, fraction=0.046, pad=0.04, label="Correlação")
+    plt.xticks(range(len(corr.columns)), corr.columns, rotation=45, ha="right")
+    plt.yticks(range(len(corr.index)), corr.index)
+    plt.title("Matriz de Correlação — Retornos Diários (2025)")
+    for i in range(len(corr.index)):
+        for j in range(len(corr.columns)):
+            plt.text(j, i, f"{corr.values[i,j]:.2f}", ha="center", va="center", color="black", fontsize=9)
+    finalize_plot(os.path.join(OUTDIR, "epu_metais_2025_correlacao.png"))
+
+    # ---------- SUMMARY ----------
+    ytd = (df.iloc[-1] / df.iloc[0] - 1) * 100
+    vol = rets.std() * np.sqrt(252) * 100
+    summary = pd.DataFrame({
+        "Ticker": [TICKERS[c] for c in df.columns],
+        "Retorno YTD (%)": ytd.round(2),
+        "Volatilidade Anualizada (%)": vol.round(2)
+    }, index=df.columns)
+    summary.index.name = "Ativo"
+    print(summary)
+    summary.to_csv(os.path.join(OUTDIR, "epu_metais_2025_resumo.csv"), encoding="utf-8-sig")
+
+if __name__ == "__main__":
+    main()
