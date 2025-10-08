@@ -1,0 +1,304 @@
+# ===============================================
+# EM Ásia & Oriente Médio — YTD, Vol, FX e Correlações (2025)
+# ===============================================
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+# --------- Config geral ----------
+plt.rcParams["figure.figsize"] = (10, 6)
+plt.rcParams["axes.grid"] = True
+
+ANO = datetime.now().year
+START = datetime(ANO, 1, 1)
+FONTE = "Fonte: Yahoo Finance/Elaboração: Santa Fé Investimentos"
+
+# --------- Clusters e cores ----------
+# Ásia: China=vermelho, Índia=laranja, Indonésia=azul escuro, Malásia=marrom,
+# Filipinas=verde, Tailândia=cyan, Taiwan=roxo, Coreia=cinza, Vietnã=marrom
+cluster_asia = {
+    'China':       {'ticker': 'MCHI', 'color': 'red'},
+    'Coreia':      {'ticker': 'EWY',  'color': 'gray'},
+    'Filipinas':   {'ticker': 'EPHE', 'color': 'green'},
+    'India':       {'ticker': 'INDA', 'color': 'orange'},
+    'Indonésia':   {'ticker': 'EIDO', 'color': 'navy'},     # azul escuro
+    'Malásia':     {'ticker': 'EWM',  'color': 'brown'},
+    'Tailândia':   {'ticker': 'THD',  'color': 'cyan'},
+    'Taiwan':      {'ticker': 'EWT',  'color': 'purple'},
+    'Vietnã':      {'ticker': 'VNM',  'color': 'saddlebrown'},  # marrom
+}
+
+# Oriente Médio (sem Paquistão)
+cluster_me = {
+    'Arábia Saudita': {'ticker': 'KSA', 'color': 'darkgreen'},
+    'Emirados Árabes':{'ticker': 'UAE', 'color': 'olive'},
+    'Catar':          {'ticker': 'QAT', 'color': 'purple'},
+    'Kuwait':         {'ticker': 'KWT', 'color': 'blue'},
+}
+
+# FX (vs USD) – séries do Yahoo
+fx_tickers_asia = {
+    'CNY/USD': 'CNY=X',
+    'INR/USD': 'INR=X',
+    'IDR/USD': 'IDR=X',
+    'MYR/USD': 'MYR=X',
+    'PHP/USD': 'PHP=X',
+    'THB/USD': 'THB=X',
+    'TWD/USD': 'TWD=X',
+    'KRW/USD': 'KRW=X',
+    'VND/USD': 'VND=X',
+}
+fx_tickers_me = {
+    'SAR/USD': 'SAR=X',
+    'AED/USD': 'AED=X',
+    'QAR/USD': 'QAR=X',
+    'KWD/USD': 'KWD=X',
+}
+
+# =======================
+# Helpers de visualização
+# =======================
+def _add_source():
+    """Adiciona a fonte no canto inferior esquerdo do gráfico."""
+    plt.gcf().text(0.01, 0.01, FONTE, fontsize=9)
+
+def _add_bar_labels(ax):
+    """Rótulos % em negrito em cada barra (acima se positivo, abaixo se negativo)."""
+    for p in ax.patches:
+        value = p.get_height()
+        x = p.get_x() + p.get_width() / 2
+        offset = 3 if value >= 0 else -12
+        ax.annotate(
+            f"{value:.2%}", (x, value),
+            xytext=(0, offset),
+            textcoords="offset points",
+            ha="center",
+            va="bottom" if value >= 0 else "top",
+            fontsize=9,
+            fontweight='bold'
+        )
+
+def bar_with_mean(series, title, colors):
+    mean_val = series.mean()
+    ax = series.plot(kind='bar', color=colors)
+    ax.axhline(mean_val, color='black', linestyle='--')
+    ax.text(
+        x=len(series)-0.5, y=mean_val,
+        s=f"Média: {mean_val:.2%}",
+        va='bottom', ha='right', fontsize=9, color='black', fontweight='bold'
+    )
+    ax.set_title(title)
+    ax.set_ylabel('Retorno')
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y,_: f"{y:.0%}"))
+    _add_bar_labels(ax)
+    plt.tight_layout()
+    _add_source()
+    plt.show()
+
+def bar_vol(series, title, colors):
+    ax = series.plot(kind='bar', color=colors)
+    ax.set_title(title)
+    ax.set_ylabel('Vol anualizada')
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y,_: f"{y:.0%}"))
+    _add_bar_labels(ax)
+    plt.tight_layout()
+    _add_source()
+    plt.show()
+
+def line_perf(perf_df, mapping, title):
+    ax = None
+    for col in perf_df.columns:
+        ax = perf_df[col].plot(ax=ax, label=col, color=mapping[col]['color'])
+    plt.title(title)
+    plt.ylabel('Acumulado (YTD)')
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y,_: f"{y:.0%}"))
+    plt.legend()
+    plt.tight_layout()
+    _add_source()
+    plt.show()
+
+def line_fx(perf_df, title):
+    ax = None
+    for col in perf_df.columns:
+        ax = perf_df[col].plot(ax=ax, label=col)
+    plt.title(title + " — variação vs USD (base=0%)")
+    plt.ylabel('Acumulado (YTD)')
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y,_: f"{y:.0%}"))
+    plt.legend(ncol=2)
+    plt.tight_layout()
+    _add_source()
+    plt.show()
+
+def heatmap_corr(corr_df, title):
+    """Heatmap de correlação em matplotlib puro, com cmap 'coolwarm' e sem linhas de grade."""
+    fig, ax = plt.subplots(figsize=(8 + 0.3*len(corr_df), 6 + 0.3*len(corr_df)))
+    im = ax.imshow(corr_df.values, vmin=-1, vmax=1, cmap='coolwarm')
+
+    # remove grid e linhas de contorno
+    ax.grid(False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.set_xticks(np.arange(len(corr_df.columns)))
+    ax.set_yticks(np.arange(len(corr_df.index)))
+    ax.set_xticklabels(corr_df.columns, rotation=45, ha="right")
+    ax.set_yticklabels(corr_df.index)
+    ax.set_title(title)
+
+    # anotações dos valores
+    for i in range(len(corr_df.index)):
+        for j in range(len(corr_df.columns)):
+            ax.text(j, i, f"{corr_df.iat[i, j]:.2f}",
+                    ha="center", va="center", fontsize=9, color="black")
+
+    # barra de cores
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.ax.set_ylabel('Correlação', rotation=-90, va="bottom")
+
+    plt.tight_layout()
+    _add_source()
+    plt.show()
+
+# =======================
+# Helpers de dados
+# =======================
+def download_close(tickers, start=START):
+    """Baixa Close (ajustado) e retorna DataFrame com colunas = tickers."""
+    df = yf.download(tickers, start=start, auto_adjust=True, progress=False)
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        close = df['Close'].copy()
+    else:
+        if 'Close' in df:
+            close = df[['Close']].copy()
+        else:
+            close = pd.DataFrame(df)
+            if 'Close' not in close.columns:
+                colname = tickers if isinstance(tickers, str) else tickers[0]
+                close.columns = [colname]
+                return close
+        if close.shape[1] == 1:
+            colname = tickers if isinstance(tickers, str) else tickers[0]
+            close.columns = [colname]
+
+    close = close.dropna(how='all')
+    close = close.loc[:, ~close.columns.duplicated()]
+    return close
+
+def ytd_perf(close_df):
+    base = close_df.ffill().bfill().iloc[0]
+    perf = close_df.divide(base) - 1.0
+    return perf
+
+def ann_vol(close_df):
+    ret = close_df.ffill().bfill().pct_change().dropna()
+    return ret.std() * np.sqrt(252)
+
+def ensure_subset(close_df, mapping):
+    """Mantém só tickers disponíveis e renomeia colunas para nomes dos países."""
+    tickers = [v['ticker'] for v in mapping.values()]
+    available = [t for t in tickers if t in close_df.columns]
+    if not available:
+        return pd.DataFrame()
+
+    sub = close_df[available].copy()
+    rev = {v['ticker']: k for k, v in mapping.items()}  # ticker -> país
+    sub.columns = [rev[t] for t in sub.columns]
+    return sub
+
+def color_list(names, mapping):
+    return [mapping[n]['color'] for n in names]
+
+def get_fx_close(fx_map, start=START):
+    """Baixa Close das moedas e retorna DataFrame com colunas = pares FX."""
+    series_list = []
+    names = []
+    for name, tkr in fx_map.items():
+        df = yf.download(tkr, start=start, auto_adjust=True, progress=False)
+        if df is None or df.empty or 'Close' not in df.columns:
+            continue
+        s = df['Close'].dropna()
+        if s.empty:
+            continue
+        s.name = name
+        series_list.append(s)
+        names.append(name)
+    if not series_list:
+        return pd.DataFrame()
+    fx_close = pd.concat(series_list, axis=1)
+    fx_close.columns = names
+    return fx_close
+
+def get_fx_perf(fx_map, start=START):
+    """Retorna DataFrame de performance acumulada YTD das moedas."""
+    fx_close = get_fx_close(fx_map, start=start)
+    if fx_close.empty:
+        return pd.DataFrame()
+    perf = fx_close / fx_close.iloc[0] - 1.0
+    return perf
+
+def corr_from_close(close_df):
+    """Correlação dos retornos diários (a partir de 'Close')."""
+    if close_df.shape[1] < 2:
+        return pd.DataFrame()
+    ret = close_df.ffill().bfill().pct_change().dropna()
+    return ret.corr()
+
+# =======================
+# Pipeline por cluster
+# =======================
+def run_cluster(cluster_name, mapping, fx_map):
+    # --- ETFs ---
+    tickers = [v['ticker'] for v in mapping.values()]
+    close = download_close(tickers, start=START)
+    close_named = ensure_subset(close, mapping)
+    if close_named.empty:
+        raise ValueError(f"Nenhum preço disponível para {cluster_name}. Verifique tickers/period.")
+
+    # métricas ETFs
+    perf = ytd_perf(close_named)
+    ret_ytd = perf.iloc[-1].sort_values(ascending=False)
+    vol = ann_vol(close_named).reindex(close_named.columns)
+
+    # cores alinhadas à ordem das séries
+    cols_ret = list(ret_ytd.index)
+    cols_vol = list(vol.index)
+    colors_ret = color_list(cols_ret, mapping)
+    colors_vol = color_list(cols_vol, mapping)
+
+    # gráficos ETF
+    line_perf(perf, mapping, f"Performance YTD — {cluster_name}")
+    bar_with_mean(ret_ytd, f"Retorno YTD — {cluster_name}", colors_ret)
+    bar_vol(vol, f"Volatilidade Anualizada — {cluster_name}", colors_vol)
+
+    # correlação ETFs (retornos diários)
+    corr_etf = corr_from_close(close_named)
+    if not corr_etf.empty:
+        heatmap_corr(corr_etf, f"Matriz de Correlação — Retornos Diários (ETFs) — {cluster_name}")
+    else:
+        print(f"[Aviso] Sem dados suficientes para correlação de ETFs em {cluster_name}.")
+
+    # --- FX ---
+    fx_close = get_fx_close(fx_map, start=START)
+    if not fx_close.empty:
+        fx_perf = fx_close / fx_close.iloc[0] - 1.0
+        line_fx(fx_perf, f"Moedas — {cluster_name}")
+        corr_fx = corr_from_close(fx_close)
+        if not corr_fx.empty:
+            heatmap_corr(corr_fx, f"Matriz de Correlação — Retornos Diários (FX) — {cluster_name}")
+        else:
+            print(f"[Aviso] Sem dados suficientes para correlação de FX em {cluster_name}.")
+    else:
+        print(f"[Aviso] Não há séries FX suficientes para {cluster_name} no período.")
+
+# ===== Execução =====
+if __name__ == "__main__":
+    # Ásia Emergente
+    run_cluster("Ásia Emergente", cluster_asia, fx_tickers_asia)
+
+    # Oriente Médio (sem Paquistão)
+    run_cluster("Oriente Médio", cluster_me, fx_tickers_me)
