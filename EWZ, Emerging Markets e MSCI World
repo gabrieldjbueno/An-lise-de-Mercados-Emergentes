@@ -1,0 +1,226 @@
+# ===============================================
+# EWZ vs MSCI World vs MSCI EM — YTD, Vol, Correlação (2025)
+# ===============================================
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+# --------- Config geral ----------
+plt.rcParams["figure.figsize"] = (10, 6)
+plt.rcParams["axes.grid"] = True
+
+ANO = datetime.now().year
+START = datetime(ANO, 1, 1)
+FONTE = "Fonte: Yahoo Finance/Elaboração: Santa Fé Investimentos"
+
+# --------- Universe & Cores ----------
+# MSCI World: URTH (iShares MSCI World)
+# MSCI EM:    EEM  (iShares MSCI Emerging Markets)
+# Brasil:     EWZ  (iShares MSCI Brazil)
+mapping = {
+    "MSCI World": {"ticker": "URTH", "color": "navy"},   # azul escuro
+    "MSCI EM":    {"ticker": "EEM",  "color": "saddlebrown"},  # marrom
+    "EWZ":        {"ticker": "EWZ",  "color": "green"},  # verde
+}
+
+# =======================
+# Helpers visuais
+# =======================
+def _add_source():
+    plt.gcf().text(0.01, 0.01, FONTE, fontsize=9)
+
+def _add_bar_labels(ax):
+    for p in ax.patches:
+        value = p.get_height()
+        x = p.get_x() + p.get_width() / 2
+        offset = 3 if value >= 0 else -12
+        ax.annotate(
+            f"{value:.2%}", (x, value),
+            xytext=(0, offset),
+            textcoords="offset points",
+            ha="center",
+            va="bottom" if value >= 0 else "top",
+            fontsize=9,
+            fontweight="bold"
+        )
+
+def line_perf(perf_df, mapping, title):
+    ax = None
+    for col in perf_df.columns:
+        ax = perf_df[col].plot(ax=ax, label=col, color=mapping[col]["color"])
+    plt.title(title)
+    plt.ylabel("Acumulado (YTD)")
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y,_: f"{y:.0%}"))
+    plt.legend()
+    plt.tight_layout()
+    _add_source()
+    plt.show()
+
+def bar_with_mean(series, title, colors):
+    mean_val = series.mean()
+    ax = series.plot(kind="bar", color=colors)
+    ax.axhline(mean_val, color="black", linestyle="--")
+    ax.text(
+        x=len(series)-0.5, y=mean_val,
+        s=f"Média: {mean_val:.2%}",
+        va="bottom", ha="right", fontsize=9, color="black", fontweight="bold"
+    )
+    ax.set_title(title)
+    ax.set_ylabel("Retorno")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y,_: f"{y:.0%}"))
+    _add_bar_labels(ax)
+    plt.tight_layout()
+    _add_source()
+    plt.show()
+
+def bubble_vol(series, title, colors, size_min=400, size_max=2200, label_size=12):
+    """
+    Bubble chart de volatilidade: o tamanho do ponto ~ vol anualizada.
+    Ajustes: rótulos em negrito, sem legenda, anotações maiores.
+    """
+    names = list(series.index)
+    vols  = series.values
+
+    # mapeia vol -> tamanho (área do marcador)
+    vmin, vmax = float(series.min()), float(series.max())
+    if vmin == vmax:
+        sizes = np.full_like(vols, (size_min + size_max) / 2.0)
+    else:
+        sizes = np.interp(vols, (vmin, vmax), (size_min, size_max))
+
+    x = np.arange(len(names))
+    y = np.zeros_like(x, dtype=float)
+
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    ax.scatter(x, y, s=sizes, c=colors, alpha=0.85)
+
+    # eixo-x e rótulos (negrito)
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=0, fontweight="bold", fontsize=label_size)
+    ax.set_yticks([])               # sem eixo-y
+    ax.set_ylim(-0.5, 0.5)
+    ax.set_title(title)
+
+    # rótulos percentuais acima das bolhas (maiores + negrito)
+    for xi, vi in zip(x, vols):
+        ax.annotate(f"{vi:.2%}", (xi, 0), xytext=(0, 12),
+                    textcoords="offset points", ha="center",
+                    fontsize=label_size, fontweight="bold")
+
+    # sem legenda: removemos qualquer coisa existente
+    leg = ax.get_legend()
+    if leg is not None:
+        leg.remove()
+
+    plt.tight_layout()
+    _add_source()
+    plt.show()
+
+
+
+def heatmap_corr(corr_df, title):
+    """Heatmap coolwarm sem linhas de grade, com anotações."""
+    fig, ax = plt.subplots(figsize=(7.5, 6))
+    im = ax.imshow(corr_df.values, vmin=-1, vmax=1, cmap="coolwarm")
+
+    # sem grid/bordas
+    ax.grid(False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.set_xticks(np.arange(len(corr_df.columns)))
+    ax.set_yticks(np.arange(len(corr_df.index)))
+    ax.set_xticklabels(corr_df.columns, rotation=45, ha="right")
+    ax.set_yticklabels(corr_df.index)
+    ax.set_title(title)
+
+    for i in range(len(corr_df.index)):
+        for j in range(len(corr_df.columns)):
+            ax.text(j, i, f"{corr_df.iat[i, j]:.2f}",
+                    ha="center", va="center", fontsize=9, color="black")
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.ax.set_ylabel("Correlação", rotation=-90, va="bottom")
+
+    plt.tight_layout()
+    _add_source()
+    plt.show()
+
+# =======================
+# Helpers de dados
+# =======================
+def download_close(tickers, start=START):
+    df = yf.download(tickers, start=start, auto_adjust=True, progress=False)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    if isinstance(df.columns, pd.MultiIndex):
+        close = df["Close"].copy()
+    else:
+        if "Close" in df:
+            close = df[["Close"]].copy()
+        else:
+            close = pd.DataFrame(df)
+            if "Close" not in close.columns:
+                colname = tickers if isinstance(tickers, str) else tickers[0]
+                close.columns = [colname]
+                return close
+        if close.shape[1] == 1:
+            colname = tickers if isinstance(tickers, str) else tickers[0]
+            close.columns = [colname]
+    close = close.dropna(how="all")
+    close = close.loc[:, ~close.columns.duplicated()]
+    return close
+
+def ytd_perf(close_df):
+    base = close_df.ffill().bfill().iloc[0]
+    perf = close_df.divide(base) - 1.0
+    return perf
+
+def ann_vol(close_df):
+    ret = close_df.ffill().bfill().pct_change().dropna()
+    return ret.std() * np.sqrt(252)
+
+def ensure_subset(close_df, mapping):
+    tickers = [v["ticker"] for v in mapping.values()]
+    available = [t for t in tickers if t in close_df.columns]
+    if not available:
+        return pd.DataFrame()
+    sub = close_df[available].copy()
+    rev = {v["ticker"]: k for k, v in mapping.items()}  # ticker -> nome
+    sub.columns = [rev[t] for t in sub.columns]
+    return sub
+
+def color_list(names, mapping):
+    return [mapping[n]["color"] for n in names]
+
+# =======================
+# Execução
+# =======================
+if __name__ == "__main__":
+    tickers = [v["ticker"] for v in mapping.values()]
+    close = download_close(tickers, start=START)
+    close_named = ensure_subset(close, mapping)
+    if close_named.empty:
+        raise ValueError("Nenhum preço disponível. Verifique tickers/período.")
+
+    # Métricas
+    perf = ytd_perf(close_named)
+    ret_ytd = perf.iloc[-1].sort_values(ascending=False)
+    vol = ann_vol(close_named).reindex(close_named.columns)
+
+    # Cores nas ordens dos gráficos
+    colors_line = color_list(list(perf.columns), mapping)
+    colors_bar  = color_list(list(ret_ytd.index), mapping)
+    colors_scat = color_list(list(vol.index), mapping)
+
+    # Gráficos
+    line_perf(perf, mapping, "Performance YTD — EWZ vs MSCI World vs MSCI EM")
+    bar_with_mean(ret_ytd, "Retorno YTD — EWZ vs MSCI World vs MSCI EM", colors_bar)
+    bubble_vol(vol, "Volatilidade Anualizada — EWZ vs MSCI World vs MSCI EM", colors_scat)
+
+    # Correlação (retornos diários)
+    ret_daily = close_named.ffill().bfill().pct_change().dropna()
+    corr = ret_daily.corr()
+    heatmap_corr(corr, "Matriz de Correlação — Retornos Diários")
