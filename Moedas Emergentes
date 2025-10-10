@@ -1,0 +1,122 @@
+# -*- coding: utf-8 -*-
+"""
+Moedas EM – Performance YTD e do dia (10/10/2025)
+Fonte: Yahoo Finance / Elaboração: Santa Fé Investimentos
+"""
+
+import datetime as dt
+import pandas as pd
+import numpy as np
+import yfinance as yf
+import matplotlib.pyplot as plt
+
+# ==============================
+# Parâmetros
+# ==============================
+AS_OF = dt.date(2025, 10, 10)
+
+tickers = {
+    "Argentina": "USDARS=X",
+    "Brasil": "USDBRL=X",
+    "China": "USDCNY=X",
+    "Rússia": "USDRUB=X",
+    "Índia": "USDINR=X",
+    "México": "USDMXN=X",
+    "Coreia do Sul": "USDKRW=X",
+}
+
+colors = {
+    "Argentina": "c",         # Cyan
+    "Brasil": "g",            # Verde
+    "China": "r",             # Vermelho
+    "Rússia": "purple",       # Roxo
+    "Índia": "orange",        # Laranja
+    "México": "saddlebrown",  # Marrom
+    "Coreia do Sul": "gray",  # Cinza
+}
+
+# ==============================
+# Download de dados
+# ==============================
+start = dt.date(AS_OF.year, 1, 1)
+end = AS_OF + dt.timedelta(days=1)
+
+data = yf.download(list(tickers.values()), start=start, end=end, auto_adjust=True, progress=False)["Close"]
+rename_map = {v: k for k, v in tickers.items()}
+data = data.rename(columns=rename_map)[list(tickers.keys())].dropna(how="all").ffill().dropna(how="any")
+
+# ==============================
+# Cálculo de performances
+# ==============================
+rets = data.pct_change()
+cum_pair = (1 + rets).cumprod() - 1
+cum_currency = -cum_pair  # inversão: força da moeda local
+ytd_currency = cum_currency.loc[cum_currency.index >= data.index[0]].copy()
+
+ytd_last = ytd_currency.loc[ytd_currency.index <= pd.Timestamp(AS_OF)].iloc[-1] * 100.0
+last_idx = ytd_currency.index[ytd_currency.index <= pd.Timestamp(AS_OF)][-1]
+prev_idx = ytd_currency.index[ytd_currency.index < last_idx][-1]
+daily_pair_ret = (data.loc[last_idx] / data.loc[prev_idx] - 1.0)
+daily_currency_ret = -daily_pair_ret * 100.0
+
+# ==============================
+# Função de rodapé padrão
+# ==============================
+def add_footer():
+    plt.figtext(0.5, 0.01, "Fonte: Yahoo Finance / Elaboração: Santa Fé Investimentos",
+                ha="center", fontsize=9, color="dimgray")
+
+# ==============================
+# Gráficos
+# ==============================
+# Linha
+plt.figure(figsize=(11, 6))
+for country in tickers.keys():
+    plt.plot(ytd_currency.index, ytd_currency[country] * 100.0, label=country, linewidth=2, color=colors[country])
+plt.title("Moedas EM — Performance YTD (%)\n(positiva = moeda local mais forte vs. USD)")
+plt.xlabel("Data")
+plt.ylabel("Retorno (%)")
+plt.legend(ncol=3, loc="best")
+plt.grid(True, alpha=0.3)
+add_footer()
+plt.tight_layout(rect=[0, 0.03, 1, 1])
+plt.show()
+
+# Barras YTD
+order = list(tickers.keys())
+ytd_vals = ytd_last[order]
+
+plt.figure(figsize=(10, 5))
+bars = plt.bar(order, ytd_vals.values, color=[colors[c] for c in order])
+plt.title(f"Moedas EM — Performance YTD (%) até {AS_OF.strftime('%d/%m/%Y')}")
+plt.ylabel("Retorno (%)")
+plt.grid(axis="y", alpha=0.3)
+for b, val in zip(bars, ytd_vals.values):
+    plt.text(b.get_x() + b.get_width()/2, b.get_height(), f"{val:.1f}%", ha="center", va="bottom", fontsize=10)
+add_footer()
+plt.tight_layout(rect=[0, 0.03, 1, 1])
+plt.show()
+
+# Barras do dia
+day_vals = daily_currency_ret[order]
+plt.figure(figsize=(10, 5))
+bars = plt.bar(order, day_vals.values, color=[colors[c] for c in order])
+plt.title(f"Moedas EM — Variação no dia {AS_OF.strftime('%d/%m/%Y')} (%)")
+plt.ylabel("Retorno (%)")
+plt.grid(axis="y", alpha=0.3)
+for b, val in zip(bars, day_vals.values):
+    plt.text(b.get_x() + b.get_width()/2, b.get_height(), f"{val:.2f}%", ha="center", va="bottom", fontsize=10)
+add_footer()
+plt.tight_layout(rect=[0, 0.03, 1, 1])
+plt.show()
+
+# ==============================
+# Tabela resumo
+# ==============================
+resumo = pd.DataFrame({
+    "YTD (%)": ytd_vals.round(2),
+    f"{AS_OF.strftime('%d/%m/%Y')} (%)": day_vals.round(2)
+})
+print("\nResumo — Moedas EM (positiva = moeda local mais forte vs. USD)")
+print(resumo)
+print("\nFonte: Yahoo Finance / Elaboração: Santa Fé Investimentos")
